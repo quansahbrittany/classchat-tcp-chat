@@ -1,5 +1,9 @@
+
 .venv/
 __pycache__/
 *.py[cod]
 .DS_Store
-Brittany_Quansah_901044324_*.py
+
+Brittany_Quansah_*_server.py
+Brittany_Quansah_*_client.py
+
