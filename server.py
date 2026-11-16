@@ -1,5 +1,6 @@
 
-# ClassChat - Multi-Client TCP Server
+# ClassChat - Multi-Client TCP Chat Server
+# CS 350 Semester Project - Fall 2026
 
 import socket
 import threading
@@ -9,15 +10,17 @@ import json
 HOST = "127.0.0.1"
 PORT = 5050
 
-# Store connected clients and chat rooms
+# Connected clients and chat rooms
 clients = {}
 rooms = {}
 
-# Protect shared data when multiple threads access it
+# Protect shared data between client threads
 server_lock = threading.RLock()
 
 
 class ClientConnection:
+    """Stores information about a connected client."""
+
     def __init__(self, sock, address):
         self.sock = sock
         self.address = address
@@ -26,30 +29,40 @@ class ClientConnection:
 
 
 def send_json(client, message):
-    """Send a JSON message to one client."""
+    """Send a JSON message containing the required four fields."""
+
+    data = {
+        "status": message.get("status", "notice"),
+        "sender": message.get("sender", "SERVER"),
+        "receiver": message.get("receiver", ""),
+        "text": message.get("text", "")
+    }
+
     try:
-        data = json.dumps(message) + "\n"
+        encoded_message = json.dumps(data) + "\n"
 
         with client.send_lock:
-            client.sock.sendall(data.encode("utf-8"))
+            client.sock.sendall(encoded_message.encode("utf-8"))
 
     except OSError:
         pass
 
 
-def send_status(client, text, status="ok"):
-    """Send a status or error message."""
+def send_status(client, text, status="notice"):
+    """Send a notification or error to one client."""
+
     send_json(client, {
         "status": status,
         "sender": "SERVER",
-        "receiver": client.username,
+        "receiver": client.username or "",
         "text": text
     })
 
 
 def register_client(client, message):
-    """Register a client with a unique username."""
-    username = message.get("username", "").strip()
+    """Register a client using a unique username."""
+
+    username = message.get("sender", "").strip()
 
     if not username:
         send_status(client, "Username cannot be empty.", "error")
@@ -57,47 +70,76 @@ def register_client(client, message):
 
     with server_lock:
         if username in clients:
-            send_status(client, "That username is already taken.", "error")
+            send_status(
+                client,
+                "That username is already taken.",
+                "error"
+            )
             return False
 
         client.username = username
         clients[username] = client
 
-    send_status(client, f"Welcome to ClassChat, {username}!")
+    send_status(
+        client,
+        f"Welcome to ClassChat, {username}!"
+    )
+
     print(f"{username} connected from {client.address}")
 
     return True
 
 
 def handle_private_message(client, message):
-    """Send a private message to another connected user."""
+    """Route a private message to one connected user."""
+
     receiver = message.get("receiver", "").strip()
     text = message.get("text", "").strip()
 
     if not receiver or not text:
-        send_status(client, "Usage: /private username message", "error")
+        send_status(
+            client,
+            "Usage: /private username message",
+            "error"
+        )
         return
 
     with server_lock:
         recipient = clients.get(receiver)
 
     if recipient is None:
-        send_status(client, f"{receiver} is not online.", "error")
+        send_status(
+            client,
+            f"{receiver} is not online.",
+            "error"
+        )
+        return
+
+    if recipient is client:
+        send_status(
+            client,
+            "You cannot send a private message to yourself.",
+            "error"
+        )
         return
 
     send_json(recipient, {
-        "status": "message",
+        "status": "private",
         "sender": client.username,
         "receiver": receiver,
         "text": text
     })
 
-    send_status(client, f"Private message sent to {receiver}.")
+    send_status(
+        client,
+        f"Private message sent to {receiver}."
+    )
 
 
 def create_room(client, message):
-    """Create a room and add its creator."""
-    room_name = message.get("room", "").strip()
+    """Create a new group and add its creator."""
+
+    room_name = message.get("receiver", "").strip()
 
     if not room_name:
         send_status(client, "Enter a room name.", "error")
@@ -105,118 +147,192 @@ def create_room(client, message):
 
     with server_lock:
         if room_name in rooms:
-            send_status(client, "That room already exists.", "error")
+            send_status(
+                client,
+                "That room already exists.",
+                "error"
+            )
             return
 
         rooms[room_name] = {client.username}
 
-    send_status(client, f"Room '{room_name}' created. You joined it.")
+    send_status(
+        client,
+        f"Room '{room_name}' created. You joined it."
+    )
+
     print(f"{client.username} created room {room_name}")
 
 
 def join_room(client, message):
-    """Add a client to an existing room."""
-    room_name = message.get("room", "").strip()
+    """Allow a client to join an existing group."""
 
-    with server_lock:
-        if room_name not in rooms:
-            send_status(client, f"Room '{room_name}' does not exist.", "error")
-            return
+    room_name = message.get("receiver", "").strip()
 
-        rooms[room_name].add(client.username)
-        members = list(rooms[room_name])
-
-    send_status(client, f"You joined room '{room_name}'.")
-
-    for username in members:
-        if username != client.username:
-            with server_lock:
-                member = clients.get(username)
-
-            if member:
-                send_status(member, f"{client.username} joined {room_name}.")
-
-
-def send_group_message(client, message):
-    """Send a message to everyone in a room."""
-    room_name = message.get("room", "").strip()
-    text = message.get("text", "").strip()
-
-    if not text:
-        send_status(client, "Group message cannot be empty.", "error")
+    if not room_name:
+        send_status(client, "Enter a room name.", "error")
         return
 
     with server_lock:
         if room_name not in rooms:
-            send_status(client, f"Room '{room_name}' does not exist.", "error")
+            send_status(
+                client,
+                f"Room '{room_name}' does not exist.",
+                "error"
+            )
+            return
+
+        if client.username in rooms[room_name]:
+            send_status(
+                client,
+                f"You are already in room '{room_name}'."
+            )
+            return
+
+        rooms[room_name].add(client.username)
+
+        members = [
+            clients[name]
+            for name in rooms[room_name]
+            if name in clients
+        ]
+
+    send_status(client, f"You joined room '{room_name}'.")
+
+    for member in members:
+        if member is not client:
+            send_status(
+                member,
+                f"{client.username} joined room '{room_name}'."
+            )
+
+
+def send_group_message(client, message):
+    """Broadcast a message to members of a group."""
+
+    room_name = message.get("receiver", "").strip()
+    text = message.get("text", "").strip()
+
+    if not text:
+        send_status(
+            client,
+            "Group message cannot be empty.",
+            "error"
+        )
+        return
+
+    with server_lock:
+        if room_name not in rooms:
+            send_status(
+                client,
+                f"Room '{room_name}' does not exist.",
+                "error"
+            )
             return
 
         if client.username not in rooms[room_name]:
-            send_status(client, f"You have not joined '{room_name}'.", "error")
+            send_status(
+                client,
+                f"You have not joined '{room_name}'.",
+                "error"
+            )
             return
 
         recipients = [
-            clients[username]
-            for username in rooms[room_name]
-            if username in clients
+            clients[name]
+            for name in rooms[room_name]
+            if name in clients
         ]
 
     for recipient in recipients:
         send_json(recipient, {
-            "status": "message",
+            "status": "group",
             "sender": client.username,
-            "receiver": f"room:{room_name}",
+            "receiver": room_name,
             "text": text
         })
 
 
 def process_message(client, message):
-    """Process commands received from a registered client."""
-    command = message.get("command")
+    """Determine which action a client is requesting."""
 
-    if command == "private":
+    status = message.get("status")
+
+    if status == "private":
         handle_private_message(client, message)
 
-    elif command == "create":
+    elif status == "create":
         create_room(client, message)
 
-    elif command == "join":
+    elif status == "join":
         join_room(client, message)
 
-    elif command == "group":
+    elif status == "group":
         send_group_message(client, message)
 
-    elif command == "quit":
-        send_status(client, "You have disconnected from ClassChat.")
+    elif status == "quit":
+        send_status(
+            client,
+            "You have disconnected from ClassChat."
+        )
         return False
 
     else:
-        send_status(client, "Unknown command.", "error")
+        send_status(
+            client,
+            "Unknown command. Type /help for available commands.",
+            "error"
+        )
 
     return True
 
 
 def remove_client(client):
-    """Remove a disconnected client from the server."""
+    """Remove a disconnected user and notify remaining room members."""
+
     username = client.username
 
     if username is None:
         return
 
+    notifications = []
+
     with server_lock:
-        clients.pop(username, None)
+        # Remove the client from the active user list
+        if clients.get(username) is client:
+            del clients[username]
 
-        for room_name in list(rooms):
-            rooms[room_name].discard(username)
+        # Remove the user from every room
+        for room_name in list(rooms.keys()):
 
+            if username in rooms[room_name]:
+                rooms[room_name].remove(username)
+
+                for member_name in rooms[room_name]:
+                    member = clients.get(member_name)
+
+                    if member:
+                        notifications.append(
+                            (member, room_name)
+                        )
+
+            # Delete rooms with no remaining members
             if not rooms[room_name]:
                 del rooms[room_name]
+
+    # Notify remaining members outside the lock
+    for member, room_name in notifications:
+        send_status(
+            member,
+            f"{username} has left room '{room_name}'."
+        )
 
     print(f"{username} disconnected.")
 
 
 def handle_client(sock, address):
-    """Handle one client connection in its own thread."""
+    """Handle communication with one client in its own thread."""
+
     client = ClientConnection(sock, address)
     buffer = ""
 
@@ -238,19 +354,34 @@ def handle_client(sock, address):
 
                 try:
                     message = json.loads(line)
+
                 except json.JSONDecodeError:
-                    send_status(client, "Invalid JSON message.", "error")
+                    send_status(
+                        client,
+                        "Invalid JSON message.",
+                        "error"
+                    )
                     continue
 
                 if not isinstance(message, dict):
-                    send_status(client, "Message must be a JSON object.", "error")
+                    send_status(
+                        client,
+                        "Message must be a JSON object.",
+                        "error"
+                    )
                     continue
 
                 if client.username is None:
-                    if message.get("command") != "register":
-                        send_status(client, "Register a username first.", "error")
+
+                    if message.get("status") != "register":
+                        send_status(
+                            client,
+                            "Register a username first.",
+                            "error"
+                        )
                     else:
                         register_client(client, message)
+
                 else:
                     if not process_message(client, message):
                         return
@@ -260,6 +391,7 @@ def handle_client(sock, address):
 
     finally:
         remove_client(client)
+
         try:
             sock.close()
         except OSError:
@@ -267,13 +399,19 @@ def handle_client(sock, address):
 
 
 def main():
-    """Start the ClassChat server."""
+    """Start the ClassChat TCP server."""
+
     server_socket = socket.socket(
         socket.AF_INET,
         socket.SOCK_STREAM
     )
 
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.setsockopt(
+        socket.SOL_SOCKET,
+        socket.SO_REUSEADDR,
+        1
+    )
+
     server_socket.bind((HOST, PORT))
     server_socket.listen()
 
@@ -287,6 +425,7 @@ def main():
 
             print(f"New connection from {client_address}")
 
+            # Create a separate thread for each client
             client_thread = threading.Thread(
                 target=handle_client,
                 args=(client_socket, client_address),
