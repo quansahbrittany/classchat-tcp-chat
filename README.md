@@ -7,7 +7,7 @@ ClassChat is a multi-client chat application developed in Python using TCP socke
 
 The application allows multiple users to connect to a central server, register unique usernames, exchange private messages, and communicate through group chat rooms.
 
-This project was developed for CS 350 as a semester project focused on network programming, socket communication, and concurrent client handling.
+This project was developed for CS 350 Computer Networking as a semester project focused on network programming, socket communication, and concurrent client handling.
 
 ## Features
 
